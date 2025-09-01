@@ -28,12 +28,38 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// Handle messages from content script
+// Handle messages from popup and content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Forward messages from the popup to the content script
+  if (request.action === 'removePrefix' || request.action === 'sequentialRename' || request.action === 'checkDriveFolder') {
+    (async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab) {
+          throw new Error("No active tab found.");
+        }
+        if (!tab.url || !tab.url.startsWith("https://drive.google.com/")) {
+          // Send a specific response for checkDriveFolder if not on the right page
+          if (request.action === 'checkDriveFolder') {
+            sendResponse({ isInFolder: false });
+            return;
+          }
+          throw new Error("Not on a Google Drive page.");
+        }
+        const response = await chrome.tabs.sendMessage(tab.id, request);
+        sendResponse(response);
+      } catch (error) {
+        sendResponse({ success: false, message: error.message });
+      }
+    })();
+    return true; // Indicates async response
+  }
+
+  // Handle notification requests
   if (request.action === 'showNotification') {
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icons/icon48.png',
+      iconUrl: 'icon.png', // Corrected icon path
       title: 'Drive File Renamer',
       message: request.message
     });

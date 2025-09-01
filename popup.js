@@ -16,68 +16,50 @@ class DriveFileRenamer {
     });
   }
 
-  async checkDriveAccess() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!tab || !tab.url || !tab.url.startsWith('https://drive.google.com/')) {
-      this.showStatus('Please navigate to a Google Drive folder first.', 'error');
-      return;
-    }
-
-    // Use callback form to check for chrome.runtime.lastError
-    chrome.tabs.sendMessage(tab.id, { action: 'checkDriveFolder' }, (response) => {
-      if (chrome.runtime.lastError) {
-        this.showStatus('Could not connect to the page. Please refresh Google Drive and try again.', 'error');
-        console.error(chrome.runtime.lastError.message);
-        return;
-      }
-      
-      if (response && response.isInFolder) {
-        this.showStatus(`Ready to rename in folder: ${response.folderName}`, 'success');
-      } else {
-        this.showStatus('Please navigate to a valid folder in Google Drive.', 'warning');
-      }
+  async sendMessageToBackground(payload) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(payload, (response) => {
+        if (chrome.runtime.lastError) {
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if (response && !response.success) {
+            return reject(new Error(response.message || 'An unknown error occurred.'));
+        }
+        resolve(response);
+      });
     });
   }
 
-  async sendMessageToContentScript(payload) {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (!tabs || tabs.length === 0) {
-                return reject(new Error("No active tab found."));
-            }
-            const tabId = tabs[0].id;
-            chrome.tabs.sendMessage(tabId, payload, (response) => {
-                if (chrome.runtime.lastError) {
-                    return reject(new Error(chrome.runtime.lastError.message));
-                }
-                resolve(response);
-            });
-        });
-    });
+  async checkDriveAccess() {
+    try {
+        const response = await this.sendMessageToBackground({ action: 'checkDriveFolder' });
+        if (response && response.isInFolder) {
+            this.showStatus(`Ready to rename in folder: ${response.folderName}`, 'success');
+        } else {
+            this.showStatus('Please navigate to a valid folder in Google Drive.', 'warning');
+        }
+    } catch (error) {
+        this.showStatus(`Error: ${error.message}`, 'error');
+    }
   }
 
   async handlePrefixRemoval() {
     const prefix = document.getElementById('prefixInput').value;
-    if (!prefix) { // An empty prefix is a valid case (to do nothing), but let's consider non-empty for action.
+    if (!prefix) {
       this.showStatus('Please enter a prefix to remove.', 'error');
       return;
     }
 
+    this.showStatus('Requesting prefix removal...', 'info');
     try {
-      this.showStatus('Removing prefixes...', 'info');
-      const response = await this.sendMessageToContentScript({
+      const response = await this.sendMessageToBackground({
         action: 'removePrefix',
         prefix: prefix
       });
-
-      if (response && response.success) {
-        this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
-      } else {
-        this.showStatus(response?.message || 'Failed to remove prefixes.', 'error');
-      }
+      this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
+      // The popup might close before this is shown, notifications are better.
     } catch (error) {
-      this.showStatus(`Error: ${error.message}. Please refresh the page.`, 'error');
+      this.showStatus(`Error: ${error.message}`, 'error');
     }
   }
 
@@ -91,22 +73,18 @@ class DriveFileRenamer {
     const reverseOrder = document.getElementById('reverseOrder').checked;
     const keepExtension = document.getElementById('keepExtension').checked;
 
+    this.showStatus('Requesting sequential rename...', 'info');
     try {
-      this.showStatus('Renaming files sequentially...', 'info');
-      const response = await this.sendMessageToContentScript({
+      const response = await this.sendMessageToBackground({
         action: 'sequentialRename',
         baseName: baseName,
         reverseOrder: reverseOrder,
         keepExtension: keepExtension
       });
-
-      if (response && response.success) {
-        this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
-      } else {
-        this.showStatus(response?.message || 'Failed to rename files.', 'error');
-      }
+      this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
+      // The popup might close before this is shown, notifications are better.
     } catch (error) {
-      this.showStatus(`Error: ${error.message}. Please refresh the page.`, 'error');
+      this.showStatus(`Error: ${error.message}`, 'error');
     }
   }
 
