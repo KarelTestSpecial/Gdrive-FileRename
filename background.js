@@ -1,5 +1,50 @@
 // Background service worker
 
+// Keep-alive machanism for MV3 service workers.
+// This is a common workaround to prevent the service worker from becoming inactive
+// during long-running operations.
+let lifeline;
+
+keep_alive();
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name === 'keep_alive') {
+    lifeline = port;
+    setTimeout(keep_alive_ext, 25e3);
+    port.onDisconnect.addListener(keep_alive_ext);
+  }
+});
+
+function keep_alive_ext() {
+  if (lifeline) {
+    lifeline.disconnect();
+    lifeline = null;
+  }
+  keep_alive();
+}
+
+async function keep_alive() {
+  if (lifeline) return;
+  for (const tab of await chrome.tabs.query({ url: '*://*/*' })) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        function: () => chrome.runtime.connect({ name: 'keep_alive' }),
+      });
+      chrome.tabs.onUpdated.removeListener(retry_on_updated);
+      return;
+    } catch (e) {}
+  }
+  chrome.tabs.onUpdated.addListener(retry_on_updated);
+}
+
+async function retry_on_updated(tabId, info, tab) {
+  if (info.status === 'complete' && tab.url && /^(http|https)/.test(tab.url)) {
+    keep_alive();
+  }
+}
+
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Drive Bulk File Rename extension installed');
 });
@@ -7,11 +52,11 @@ chrome.runtime.onInstalled.addListener(() => {
 // Handle extension icon click
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.url && tab.url.includes('drive.google.com')) {
-    // Open popup if on Google Drive
-    chrome.action.openPopup();
+    // This is largely handled by the default_popup in manifest.json,
+    // but we can add logic here if needed.
   } else {
     // Navigate to Google Drive if not there
-    chrome.tabs.create({ url: 'https://drive.google.com' });
+    chrome.tabs.create({ url: 'https://drive.google.com/drive/my-drive' });
   }
 });
 

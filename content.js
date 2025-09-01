@@ -29,13 +29,27 @@ class DriveContentScript {
   }
 
   async getFileElements() {
-    await this.waitForSelector('[data-id][role="gridcell"]');
-    const fileElements = Array.from(document.querySelectorAll('[data-id][role="gridcell"]'));
-    // Filter out folders
-    return fileElements.filter(el => !el.querySelector('div[aria-label="Folder"]'));
+    // Google Drive has a list view and a grid view. We need to handle both.
+    const gridViewSelector = 'div[data-id][role="gridcell"]';
+    const listViewSelector = 'div[data-id][role="row"]';
+
+    // Wait for either view to be present.
+    await this.waitForSelector(`${gridViewSelector}, ${listViewSelector}`, 10000); // Increased timeout
+
+    const gridElements = Array.from(document.querySelectorAll(gridViewSelector));
+    const listElements = Array.from(document.querySelectorAll(listViewSelector));
+
+    const allElements = [...gridElements, ...listElements];
+
+    // The way to identify a folder is to check for an aria-label that says "Folder".
+    // This seems to be consistent across views.
+    return allElements.filter(el => {
+        const isFolder = el.querySelector('div[aria-label="Folder"], svg[aria-label="Folder"]');
+        return !isFolder;
+    });
   }
 
-  async waitForSelector(selector, timeout = 5000) {
+  async waitForSelector(selector, timeout = 10000) {
     return new Promise((resolve, reject) => {
       const element = document.querySelector(selector);
       if (element) {
