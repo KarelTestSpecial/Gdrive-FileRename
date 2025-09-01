@@ -17,69 +17,83 @@ class DriveFileRenamer {
   }
 
   async checkDriveAccess() {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
-      if (!tab.url.includes('drive.google.com')) {
-        this.showStatus('Please navigate to Google Drive first', 'error');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab || !tab.url || !tab.url.startsWith('https://drive.google.com/')) {
+      this.showStatus('Please navigate to a Google Drive folder first.', 'error');
+      return;
+    }
+
+    // Use callback form to check for chrome.runtime.lastError
+    chrome.tabs.sendMessage(tab.id, { action: 'checkDriveFolder' }, (response) => {
+      if (chrome.runtime.lastError) {
+        this.showStatus('Could not connect to the page. Please refresh Google Drive and try again.', 'error');
+        console.error(chrome.runtime.lastError.message);
         return;
       }
-
-      // Check if we're in a folder view
-      const response = await chrome.tabs.sendMessage(tab.id, { action: 'checkDriveFolder' });
       
       if (response && response.isInFolder) {
-        this.showStatus(`Ready to rename files in folder: ${response.folderName}`, 'success');
+        this.showStatus(`Ready to rename in folder: ${response.folderName}`, 'success');
       } else {
-        this.showStatus('Please open a folder in Google Drive', 'warning');
+        this.showStatus('Please navigate to a valid folder in Google Drive.', 'warning');
       }
-    } catch (error) {
-      this.showStatus('Error accessing Google Drive', 'error');
-    }
+    });
+  }
+
+  async sendMessageToContentScript(payload) {
+    return new Promise((resolve, reject) => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs || tabs.length === 0) {
+                return reject(new Error("No active tab found."));
+            }
+            const tabId = tabs[0].id;
+            chrome.tabs.sendMessage(tabId, payload, (response) => {
+                if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                }
+                resolve(response);
+            });
+        });
+    });
   }
 
   async handlePrefixRemoval() {
     const prefix = document.getElementById('prefixInput').value;
-    
-    if (!prefix.trim()) {
-      this.showStatus('Please enter a prefix to remove', 'error');
+    if (!prefix) { // An empty prefix is a valid case (to do nothing), but let's consider non-empty for action.
+      this.showStatus('Please enter a prefix to remove.', 'error');
       return;
     }
 
     try {
       this.showStatus('Removing prefixes...', 'info');
-      
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const response = await chrome.tabs.sendMessage(tab.id, {
+      const response = await this.sendMessageToContentScript({
         action: 'removePrefix',
         prefix: prefix
       });
 
       if (response && response.success) {
-        this.showStatus(`Successfully renamed ${response.count} files`, 'success');
+        this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
       } else {
-        this.showStatus(response?.message || 'Failed to remove prefixes', 'error');
+        this.showStatus(response?.message || 'Failed to remove prefixes.', 'error');
       }
     } catch (error) {
-      this.showStatus('Error during prefix removal', 'error');
+      this.showStatus(`Error: ${error.message}. Please refresh the page.`, 'error');
     }
   }
 
   async handleSequentialRename() {
     const baseName = document.getElementById('baseNameInput').value;
-    const reverseOrder = document.getElementById('reverseOrder').checked;
-    const keepExtension = document.getElementById('keepExtension').checked;
-    
     if (!baseName.trim()) {
-      this.showStatus('Please enter a base name', 'error');
+      this.showStatus('Please enter a base name.', 'error');
       return;
     }
 
+    const reverseOrder = document.getElementById('reverseOrder').checked;
+    const keepExtension = document.getElementById('keepExtension').checked;
+
     try {
       this.showStatus('Renaming files sequentially...', 'info');
-      
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const response = await chrome.tabs.sendMessage(tab.id, {
+      const response = await this.sendMessageToContentScript({
         action: 'sequentialRename',
         baseName: baseName,
         reverseOrder: reverseOrder,
@@ -87,12 +101,12 @@ class DriveFileRenamer {
       });
 
       if (response && response.success) {
-        this.showStatus(`Successfully renamed ${response.count} files`, 'success');
+        this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
       } else {
-        this.showStatus(response?.message || 'Failed to rename files', 'error');
+        this.showStatus(response?.message || 'Failed to rename files.', 'error');
       }
     } catch (error) {
-      this.showStatus('Error during sequential rename', 'error');
+      this.showStatus(`Error: ${error.message}. Please refresh the page.`, 'error');
     }
   }
 
