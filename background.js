@@ -28,40 +28,58 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// Handle messages from popup and content script
+// Relay messages from popup to content script and handle responses
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // Forward messages from the popup to the content script
-  if (request.action === 'removePrefix' || request.action === 'sequentialRename' || request.action === 'checkDriveFolder') {
+  // Actions to be forwarded to the content script
+  const contentScriptActions = ['checkDriveFolder', 'removePrefix', 'sequentialRename'];
+
+  if (contentScriptActions.includes(request.action)) {
+    // Forward the message to the active tab
     (async () => {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab) {
           throw new Error("No active tab found.");
         }
-        if (!tab.url || !tab.url.startsWith("https://drive.google.com/")) {
-          // Send a specific response for checkDriveFolder if not on the right page
-          if (request.action === 'checkDriveFolder') {
-            sendResponse({ isInFolder: false });
-            return;
-          }
-          throw new Error("Not on a Google Drive page.");
-        }
+
         const response = await chrome.tabs.sendMessage(tab.id, request);
+
+        // For rename actions, show a notification on completion
+        if (request.action === 'removePrefix' || request.action === 'sequentialRename') {
+          let notifMessage = '';
+          if (response && response.success) {
+            notifMessage = `Successfully renamed ${response.count} files.`;
+          } else {
+            notifMessage = `Failed to rename files. ${response?.message || ''}`;
+          }
+          chrome.notifications.create({
+            type: 'basic',
+            iconUrl: 'icon.png',
+            title: 'Drive File Renamer',
+            message: notifMessage
+          });
+        }
+
+        // Send response back to the popup
         sendResponse(response);
       } catch (error) {
-        sendResponse({ success: false, message: error.message });
+        console.error("Background script error:", error);
+        const errorMessage = { success: false, message: error.message };
+        // For rename actions, notify failure
+        if (request.action === 'removePrefix' || request.action === 'sequentialRename') {
+          chrome.notifications.create({
+            type: 'basic',
+            iconUrl: 'icon.png',
+            title: 'Drive File Renamer',
+            message: `An error occurred: ${error.message}`
+          });
+        }
+        sendResponse(errorMessage);
       }
     })();
+
     return true; // Indicates async response
   }
 
-  // Handle notification requests
-  if (request.action === 'showNotification') {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icon.png', // Corrected icon path
-      title: 'Drive File Renamer',
-      message: request.message
-    });
-  }
+  // Keep other message handlers if any
 });

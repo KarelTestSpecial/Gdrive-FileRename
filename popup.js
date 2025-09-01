@@ -16,30 +16,18 @@ class DriveFileRenamer {
     });
   }
 
-  async sendMessageToBackground(payload) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(payload, (response) => {
-        if (chrome.runtime.lastError) {
-          return reject(new Error(chrome.runtime.lastError.message));
-        }
-        if (response && !response.success) {
-            return reject(new Error(response.message || 'An unknown error occurred.'));
-        }
-        resolve(response);
-      });
-    });
-  }
-
   async checkDriveAccess() {
+    // This initial check can still go directly to the content script for a quick UI response.
+    // But we'll route it through the background script to keep the architecture consistent.
     try {
-        const response = await this.sendMessageToBackground({ action: 'checkDriveFolder' });
-        if (response && response.isInFolder) {
-            this.showStatus(`Ready to rename in folder: ${response.folderName}`, 'success');
-        } else {
-            this.showStatus('Please navigate to a valid folder in Google Drive.', 'warning');
-        }
+      const response = await chrome.runtime.sendMessage({ action: 'checkDriveFolder' });
+      if (response && response.isInFolder) {
+        this.showStatus(`Ready to rename in folder: ${response.folderName}`, 'success');
+      } else {
+        this.showStatus(response?.message || 'Please navigate to a valid folder in Google Drive.', 'warning');
+      }
     } catch (error) {
-        this.showStatus(`Error: ${error.message}`, 'error');
+      this.showStatus(`Error: ${error.message}`, 'error');
     }
   }
 
@@ -51,16 +39,13 @@ class DriveFileRenamer {
     }
 
     this.showStatus('Requesting prefix removal...', 'info');
-    try {
-      const response = await this.sendMessageToBackground({
-        action: 'removePrefix',
-        prefix: prefix
-      });
-      this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
-      // The popup might close before this is shown, notifications are better.
-    } catch (error) {
-      this.showStatus(`Error: ${error.message}`, 'error');
-    }
+    chrome.runtime.sendMessage({
+      action: 'removePrefix',
+      prefix: prefix
+    });
+    // The background script will handle the response and notification.
+    // We can close the popup immediately.
+    setTimeout(() => window.close(), 1000);
   }
 
   async handleSequentialRename() {
@@ -74,18 +59,14 @@ class DriveFileRenamer {
     const keepExtension = document.getElementById('keepExtension').checked;
 
     this.showStatus('Requesting sequential rename...', 'info');
-    try {
-      const response = await this.sendMessageToBackground({
-        action: 'sequentialRename',
-        baseName: baseName,
-        reverseOrder: reverseOrder,
-        keepExtension: keepExtension
-      });
-      this.showStatus(`Successfully renamed ${response.count} files.`, 'success');
-      // The popup might close before this is shown, notifications are better.
-    } catch (error) {
-      this.showStatus(`Error: ${error.message}`, 'error');
-    }
+    chrome.runtime.sendMessage({
+      action: 'sequentialRename',
+      baseName: baseName,
+      reverseOrder: reverseOrder,
+      keepExtension: keepExtension
+    });
+    // The background script will handle the response and notification.
+    setTimeout(() => window.close(), 1000);
   }
 
   showStatus(message, type) {
