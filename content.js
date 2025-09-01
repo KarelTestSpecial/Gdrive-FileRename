@@ -83,11 +83,13 @@ class DriveContentScript {
       let renamedCount = 0;
 
       for (const element of fileElements) {
+        const fileId = element.getAttribute('data-id');
         const currentName = element.querySelector('[role="option"] div[aria-label]')?.getAttribute('aria-label');
-        if (currentName && currentName.startsWith(prefix)) {
+
+        if (fileId && currentName && currentName.startsWith(prefix)) {
           const newName = currentName.substring(prefix.length);
           if (newName.trim()) {
-            const success = await this.renameFile(element, newName);
+            const success = await this.renameFile(fileId, newName);
             if (success) renamedCount++;
           }
         }
@@ -101,16 +103,15 @@ class DriveContentScript {
 
   async sequentialRenameFiles({ baseName, reverseOrder, keepExtension }) {
     try {
-      let fileElements = await this.getFileElements();
+      const fileElements = await this.getFileElements();
       
-      const fileData = fileElements.map(el => {
-          const name = el.querySelector('[role="option"] div[aria-label]')?.getAttribute('aria-label') || '';
-          return { element: el, name: name };
-      });
+      const fileData = fileElements.map(el => ({
+        element: el,
+        fileId: el.getAttribute('data-id'),
+        name: el.querySelector('[role="option"] div[aria-label]')?.getAttribute('aria-label') || ''
+      })).filter(f => f.fileId && f.name);
 
-      fileData.sort((a, b) => {
-        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
-      });
+      fileData.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
       let renamedCount = 0;
       const totalFiles = fileData.length;
@@ -127,7 +128,7 @@ class DriveContentScript {
         const index = reverseOrder ? totalFiles - i : i + 1;
         const newName = `${baseName} [${index}]${extension}`;
 
-        const success = await this.renameFile(item.element, newName);
+        const success = await this.renameFile(item.fileId, newName);
         if (success) renamedCount++;
       }
 
@@ -145,88 +146,50 @@ class DriveContentScript {
     return filename.substring(lastDot);
   }
 
-  async findElementByText(selector, text, parent = document) {
-      const elements = Array.from(parent.querySelectorAll(selector));
-      return elements.find(el => el.textContent.trim() === text);
-  }
-
-  async simulateClick(element) {
-    const dispatchMouseEvent = (type) => {
-        element.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-    };
-    dispatchMouseEvent('mousedown');
-    dispatchMouseEvent('mouseup');
-    element.click();
-  }
-
-  async renameFile(element, newName) {
+  async renameFile(fileId, newName) {
     try {
-      const fileOption = element.querySelector('[role="option"]');
-      if (!fileOption) throw new Error("Could not find file option to click");
-      await this.simulateClick(fileOption);
+      // This is a guess based on how Google's batch APIs typically work.
+      const BATCH_EXECUTE_URL = 'https://drive.google.com/drive/v2/batch/execute';
 
-      element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      const payload = [{
+        "method": "rename",
+        "params": {
+          "itemId": fileId,
+          "title": newName
+        }
+      }];
 
-      const menu = await this.waitForSelector('div[role="menu"]');
-      const renameMenuItem = await this.findElementByText('div[role="menuitem"]', 'Hernoemen', menu) || await this.findElementByText('div[role="menuitem"]', 'Rename', menu);
-      if (!renameMenuItem) throw new Error("Rename menu item not found");
-      await this.simulateClick(renameMenuItem);
+      const formData = new FormData();
+      formData.append('batchExecute', JSON.stringify(payload));
 
-      const renameDialog = await this.waitForSelector('div[role="dialog"]');
-      const renameInput = renameDialog.querySelector('input[type="text"]');
-      if (!renameInput) throw new Error("Rename input not found in dialog");
+      const response = await fetch(BATCH_EXECUTE_URL, {
+        method: 'POST',
+        body: formData,
+        // Headers like authorization and cookies are sent automatically by the browser.
+      });
 
-      await new Promise(resolve => setTimeout(resolve, 100)); // Wait for input to be ready
-
-      renameInput.value = newName;
-      renameInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-
-      const confirmButton = await this.findElementByText('button', 'Hernoemen', renameDialog) || await this.findElementByText('button', 'Rename', renameDialog);
-      if (!confirmButton) throw new Error("Confirm button not found in dialog");
-      await this.simulateClick(confirmButton);
-
-      await this.waitForSelectorToDisappear('div[role="dialog"]');
-
-      // Final check to see if the file with the new name exists
-      await this.waitForSelector(`[aria-label="${newName}"]`);
-
-      return true;
-    } catch (error) {
-      console.error('Rename failed:', error.message);
-      // Attempt to close any open dialogs or menus
-      const closeButton = document.querySelector('button[aria-label="Close"]');
-      if (closeButton) closeButton.click();
-      document.body.click(); // Deselect
-      return false;
-    }
-  }
-
-  async waitForSelectorToDisappear(selector, timeout = 5000) {
-    return new Promise((resolve, reject) => {
-      let element = document.querySelector(selector);
-      if (!element) {
-        resolve();
-        return;
+      if (!response.ok) {
+        throw new Error(`Network response was not ok, status: ${response.status}`);
       }
 
-      const observer = new MutationObserver(mutations => {
-        element = document.querySelector(selector);
-        if (!element) {
-          observer.disconnect();
-          resolve();
-        }
-      });
+      const responseText = await response.text();
+      // The response is often prefixed with ")]}'" to prevent JSON hijacking.
+      const cleanedResponse = JSON.parse(responseText.replace(")]}'", ""));
 
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-
-      setTimeout(() => {
-        observer.disconnect();
-        reject(new Error(`Timeout waiting for selector to disappear: ${selector}`));
-      }, timeout);
-    });
+      // Check the response for the specific operation's success.
+      // This structure is a guess.
+      const result = cleanedResponse[0];
+      if (result && result.result && result.result.id === fileId) {
+        console.log(`Successfully renamed file ${fileId} to ${newName}`);
+        return true;
+      } else {
+        console.error('Rename failed. API response:', cleanedResponse);
+        return false;
+      }
+    } catch (error) {
+      console.error('Error during renameFile API call:', error);
+      return false;
+    }
   }
 }
 
